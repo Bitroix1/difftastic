@@ -540,10 +540,10 @@ fn check_only_text(
     }
 }
 
-fn build_syntax_tree(value: &Value, store: &mut Vec<Syntax>) -> Syntax {
-    match value {
+fn build_syntax_tree<'a>(value: &'a Value, store: &'a mut Vec<Syntax<'a>>) -> &'a Syntax<'a> {
+    let result = match value {
         Value::Object(obj) => {
-            let children: Vec<Syntax> = obj
+            let children: Vec<&Syntax> = obj
                 .iter()
                 .flat_map(|(key, val)| {
                     let key_atom = Syntax::Atom {
@@ -552,8 +552,9 @@ fn build_syntax_tree(value: &Value, store: &mut Vec<Syntax>) -> Syntax {
                         content: key.clone(),
                         kind: AtomKind::Normal,
                     };
+                    store.push(key_atom);
                     let child_syntax = build_syntax_tree(val, store);
-                    vec![key_atom, child_syntax]
+                    vec![store.last().unwrap(), child_syntax]
                 })
                 .collect();
 
@@ -568,7 +569,7 @@ fn build_syntax_tree(value: &Value, store: &mut Vec<Syntax>) -> Syntax {
             }
         }
         Value::Array(arr) => {
-            let children: Vec<Syntax> = arr
+            let children: Vec<&Syntax> = arr
                 .iter()
                 .map(|val| build_syntax_tree(val, store))
                 .collect();
@@ -607,27 +608,31 @@ fn build_syntax_tree(value: &Value, store: &mut Vec<Syntax>) -> Syntax {
             content: "null".to_string(),
             kind: AtomKind::Normal,
         },
-    }
+    };
+
+    store.push(result);
+    return &result;
+
 }
 
-fn parse_from_json(src: &str) -> Result<Syntax, String> {
+fn parse_from_json<'a> (src: &str, store: &'a mut Vec<Syntax<'a>>) -> Result<&'a Syntax<'a>, String> {
     let v: Value = serde_json::from_str(src).map_err(|_| "Failed to parse JSON")?;
 
     if let Some(trees) = v.get("trees") {
-        let mut store_vector = Vec::new();
-        Ok(build_syntax_tree(trees, &mut store_vector))
+        Ok(build_syntax_tree(trees, store))
     } else {
         Err("Missing 'trees' field in JSON".to_string())
     }
 }
 
 
-fn to_syntax_from_json (
-    lhs_src: &str,
-    rhs_src: &str,
-) -> Result<(Syntax, Syntax), String> {
-    let lhs_tree = parse_from_json(lhs_src)?;
-    let rhs_tree = parse_from_json(rhs_src)?;
+fn to_syntax_from_json<'a> (
+    lhs_src: &'a str,
+    rhs_src: &'a str,
+    store: &'a mut Vec<Syntax<'a>>
+) -> Result<(&'a Syntax<'a>, &'a Syntax<'a>), String> {
+    let lhs_tree = parse_from_json(lhs_src, store)?;
+    let rhs_tree = parse_from_json(rhs_src, store)?;
 
     Ok((lhs_tree, rhs_tree))
 }
@@ -698,6 +703,7 @@ fn diff_file_content(
                         diff_options,
                     ) {
                         Ok((lhs, rhs)) => {
+                            let mut store_vector: Vec<Syntax<'_>> = Vec::new();
                             if diff_options.check_only {
                                 let has_syntactic_changes = lhs != rhs;
                                 return DiffResult {
