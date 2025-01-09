@@ -70,6 +70,9 @@ use crate::files::{
 use crate::parse::guess_language::language_globs;
 use crate::parse::guess_language::{guess, language_name, Language, LanguageOverride};
 use crate::parse::syntax;
+use crate::parse::syntax::Syntax;
+use crate::parse::syntax::SyntaxInfo;
+use crate::parse::syntax::AtomKind;
 
 /// The global allocator used by difftastic.
 ///
@@ -80,6 +83,8 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 use std::path::Path;
 use std::{env, thread};
+
+use serde_json::Value;
 
 use humansize::{format_size, BINARY};
 use owo_colors::OwoColorize;
@@ -533,6 +538,98 @@ fn check_only_text(
         has_byte_changes: has_changes,
         has_syntactic_changes: has_changes,
     }
+}
+
+fn build_syntax_tree(value: &Value, store: &mut Vec<Syntax>) -> Syntax {
+    match value {
+        Value::Object(obj) => {
+            let children: Vec<Syntax> = obj
+                .iter()
+                .flat_map(|(key, val)| {
+                    let key_atom = Syntax::Atom {
+                        info: SyntaxInfo::new(),
+                        position: vec![],
+                        content: key.clone(),
+                        kind: AtomKind::Normal,
+                    };
+                    let child_syntax = build_syntax_tree(val, store);
+                    vec![key_atom, child_syntax]
+                })
+                .collect();
+
+            Syntax::List {
+                info: SyntaxInfo::new(),
+                open_position: vec![],
+                open_content: "{".to_string(),
+                children,
+                close_position: vec![],
+                close_content: "}".to_string(),
+                num_descendants: children.len() as u32,
+            }
+        }
+        Value::Array(arr) => {
+            let children: Vec<Syntax> = arr
+                .iter()
+                .map(|val| build_syntax_tree(val, store))
+                .collect();
+
+            Syntax::List {
+                info: SyntaxInfo::new(),
+                open_position: vec![],
+                open_content: "[".to_string(),
+                children,
+                close_position: vec![],
+                close_content: "]".to_string(),
+                num_descendants: children.len() as u32,
+            }
+        }
+        Value::String(s) => Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: s.clone(),
+            kind: AtomKind::Normal,
+        },
+        Value::Number(n) => Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: n.to_string(),
+            kind: AtomKind::Normal,
+        },
+        Value::Bool(b) => Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: b.to_string(),
+            kind: AtomKind::Normal,
+        },
+        Value::Null => Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: "null".to_string(),
+            kind: AtomKind::Normal,
+        },
+    }
+}
+
+fn parse_from_json(src: &str) -> Result<Syntax, String> {
+    let v: Value = serde_json::from_str(src).map_err(|_| "Failed to parse JSON")?;
+
+    if let Some(trees) = v.get("trees") {
+        let mut store_vector = Vec::new();
+        Ok(build_syntax_tree(trees, &mut store_vector))
+    } else {
+        Err("Missing 'trees' field in JSON".to_string())
+    }
+}
+
+
+fn to_syntax_from_json (
+    lhs_src: &str,
+    rhs_src: &str,
+) -> Result<(Syntax, Syntax), String> {
+    let lhs_tree = parse_from_json(lhs_src)?;
+    let rhs_tree = parse_from_json(rhs_src)?;
+
+    Ok((lhs_tree, rhs_tree))
 }
 
 fn diff_file_content(
