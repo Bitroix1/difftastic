@@ -540,101 +540,103 @@ fn check_only_text(
     }
 }
 
-fn build_syntax_tree<'a>(value: &'a Value, store: &'a mut Vec<Syntax<'a>>) -> &'a Syntax<'a> {
-    let result = match value {
+fn build_syntax_tree<'a>(value: &Value, arena: &'a Arena<Syntax<'a>>) -> &'a Syntax<'a> {
+    match value {
         Value::Object(obj) => {
-            let children: Vec<&Syntax> = obj
-                .iter()
-                .flat_map(|(key, val)| {
-                    let key_atom = Syntax::Atom {
-                        info: SyntaxInfo::new(),
-                        position: vec![],
-                        content: key.clone(),
-                        kind: AtomKind::Normal,
-                    };
-                    store.push(key_atom);
-                    let child_syntax = build_syntax_tree(val, store);
-                    vec![store.last().unwrap(), child_syntax]
-                })
-                .collect();
+            let mut children: Vec<&Syntax<'a>> = Vec::new(); // Immutable references
 
-            Syntax::List {
+            for (key, val) in obj {
+                // Add key as an Atom
+                let key_atom = arena.alloc(Syntax::Atom {
+                    info: SyntaxInfo::new(),
+                    position: vec![],
+                    content: key.clone(),
+                    kind: AtomKind::Normal,
+                });
+                children.push(key_atom); // Use as immutable
+
+                // Recursively process the value
+                let child_syntax = build_syntax_tree(val, arena);
+                children.push(child_syntax); // Use as immutable
+            }
+
+            // Create and return the List node
+            arena.alloc(Syntax::List {
                 info: SyntaxInfo::new(),
                 open_position: vec![],
                 open_content: "{".to_string(),
                 children,
                 close_position: vec![],
                 close_content: "}".to_string(),
-                num_descendants: children.len() as u32,
-            }
+                num_descendants: 0, // This can be calculated later if needed
+            })
         }
+        Value::String(s) => arena.alloc(Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: s.clone(),
+            kind: AtomKind::Normal,
+        }),
+        Value::Number(n) => arena.alloc(Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: n.to_string(),
+            kind: AtomKind::Normal,
+        }),
+        Value::Bool(b) => arena.alloc(Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: b.to_string(),
+            kind: AtomKind::Normal,
+        }),
         Value::Array(arr) => {
-            let children: Vec<&Syntax> = arr
-                .iter()
-                .map(|val| build_syntax_tree(val, store))
-                .collect();
+            let mut children: Vec<&Syntax<'a>> = Vec::new();
 
-            Syntax::List {
+            for val in arr {
+                let child_syntax = build_syntax_tree(val, arena);
+                children.push(child_syntax); // Use as immutable
+            }
+
+            arena.alloc(Syntax::List {
                 info: SyntaxInfo::new(),
                 open_position: vec![],
                 open_content: "[".to_string(),
                 children,
                 close_position: vec![],
                 close_content: "]".to_string(),
-                num_descendants: children.len() as u32,
-            }
+                num_descendants: 0,
+            })
         }
-        Value::String(s) => Syntax::Atom {
-            info: SyntaxInfo::new(),
-            position: vec![],
-            content: s.clone(),
-            kind: AtomKind::Normal,
-        },
-        Value::Number(n) => Syntax::Atom {
-            info: SyntaxInfo::new(),
-            position: vec![],
-            content: n.to_string(),
-            kind: AtomKind::Normal,
-        },
-        Value::Bool(b) => Syntax::Atom {
-            info: SyntaxInfo::new(),
-            position: vec![],
-            content: b.to_string(),
-            kind: AtomKind::Normal,
-        },
-        Value::Null => Syntax::Atom {
+        Value::Null => arena.alloc(Syntax::Atom {
             info: SyntaxInfo::new(),
             position: vec![],
             content: "null".to_string(),
             kind: AtomKind::Normal,
-        },
-    };
-
-    store.push(result);
-    return &result;
-
+        }),
+    }
 }
 
-fn parse_from_json<'a> (src: &str, store: &'a mut Vec<Syntax<'a>>) -> Result<&'a Syntax<'a>, String> {
-    let v: Value = serde_json::from_str(src).map_err(|_| "Failed to parse JSON")?;
-
-    if let Some(trees) = v.get("trees") {
-        Ok(build_syntax_tree(trees, store))
+// Function to parse JSON and build the syntax tree
+pub fn parse_from_json<'a>(
+    src: &str,
+    arena: &'a Arena<Syntax<'a>>,
+) -> Result<&'a Syntax<'a>, String> {
+    let value: Value = serde_json::from_str(src).map_err(|_| "Failed to parse JSON".to_string())?;
+    if let Some(trees) = value.get("trees") {
+        Ok(build_syntax_tree(trees, arena))
     } else {
         Err("Missing 'trees' field in JSON".to_string())
     }
 }
 
-
-fn to_syntax_from_json<'a> (
-    lhs_src: &'a str,
-    rhs_src: &'a str,
-    store: &'a mut Vec<Syntax<'a>>
+fn to_syntax_from_json<'a>(
+    lhs_src: &str,
+    rhs_src: &str,
+    arena: &'a Arena<Syntax<'a>>,
 ) -> Result<(&'a Syntax<'a>, &'a Syntax<'a>), String> {
-    let lhs_tree = parse_from_json(lhs_src, store)?;
-    let rhs_tree = parse_from_json(rhs_src, store)?;
-
-    Ok((lhs_tree, rhs_tree))
+    let lhs = parse_from_json(lhs_src, arena)?;
+    let rhs = parse_from_json(rhs_src, arena)?;
+    Ok((lhs, rhs))
 }
 
 fn diff_file_content(
@@ -703,7 +705,7 @@ fn diff_file_content(
                         diff_options,
                     ) {
                         Ok((lhs, rhs)) => {
-                            let mut store_vector: Vec<Syntax<'_>> = Vec::new();
+                            //let arena = Arena::new();
                             if diff_options.check_only {
                                 let has_syntactic_changes = lhs != rhs;
                                 return DiffResult {
