@@ -70,6 +70,9 @@ use crate::files::{
 use crate::parse::guess_language::language_globs;
 use crate::parse::guess_language::{guess, language_name, Language, LanguageOverride};
 use crate::parse::syntax;
+use crate::parse::syntax::Syntax;
+use crate::parse::syntax::SyntaxInfo;
+use crate::parse::syntax::AtomKind;
 
 /// The global allocator used by difftastic.
 ///
@@ -80,6 +83,8 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 use std::path::Path;
 use std::{env, thread};
+
+use serde_json::Value;
 
 use humansize::{format_size, BINARY};
 use owo_colors::OwoColorize;
@@ -535,6 +540,105 @@ fn check_only_text(
     }
 }
 
+fn build_syntax_tree<'a>(value: &Value, arena: &'a Arena<Syntax<'a>>) -> &'a Syntax<'a> {
+    match value {
+        Value::Object(obj) => {
+            let mut children: Vec<&Syntax<'a>> = Vec::new(); // Immutable references
+
+            for (key, val) in obj {
+                // Add key as an Atom
+                let key_atom = arena.alloc(Syntax::Atom {
+                    info: SyntaxInfo::new(),
+                    position: vec![],
+                    content: key.clone(),
+                    kind: AtomKind::Normal,
+                });
+                children.push(key_atom); // Use as immutable
+
+                // Recursively process the value
+                let child_syntax = build_syntax_tree(val, arena);
+                children.push(child_syntax); // Use as immutable
+            }
+
+            // Create and return the List node
+            arena.alloc(Syntax::List {
+                info: SyntaxInfo::new(),
+                open_position: vec![],
+                open_content: "{".to_string(),
+                children,
+                close_position: vec![],
+                close_content: "}".to_string(),
+                num_descendants: 0, // This can be calculated later if needed
+            })
+        }
+        Value::String(s) => arena.alloc(Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: s.clone(),
+            kind: AtomKind::Normal,
+        }),
+        Value::Number(n) => arena.alloc(Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: n.to_string(),
+            kind: AtomKind::Normal,
+        }),
+        Value::Bool(b) => arena.alloc(Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: b.to_string(),
+            kind: AtomKind::Normal,
+        }),
+        Value::Array(arr) => {
+            let mut children: Vec<&Syntax<'a>> = Vec::new();
+
+            for val in arr {
+                let child_syntax = build_syntax_tree(val, arena);
+                children.push(child_syntax); // Use as immutable
+            }
+
+            arena.alloc(Syntax::List {
+                info: SyntaxInfo::new(),
+                open_position: vec![],
+                open_content: "[".to_string(),
+                children,
+                close_position: vec![],
+                close_content: "]".to_string(),
+                num_descendants: 0,
+            })
+        }
+        Value::Null => arena.alloc(Syntax::Atom {
+            info: SyntaxInfo::new(),
+            position: vec![],
+            content: "null".to_string(),
+            kind: AtomKind::Normal,
+        }),
+    }
+}
+
+// Function to parse JSON and build the syntax tree
+pub fn parse_from_json<'a>(
+    src: &str,
+    arena: &'a Arena<Syntax<'a>>,
+) -> Result<&'a Syntax<'a>, String> {
+    let value: Value = serde_json::from_str(src).map_err(|_| "Failed to parse JSON".to_string())?;
+    if let Some(trees) = value.get("trees") {
+        Ok(build_syntax_tree(trees, arena))
+    } else {
+        Err("Missing 'trees' field in JSON".to_string())
+    }
+}
+
+fn to_syntax_from_json<'a>(
+    lhs_src: &str,
+    rhs_src: &str,
+    arena: &'a Arena<Syntax<'a>>,
+) -> Result<(&'a Syntax<'a>, &'a Syntax<'a>), String> {
+    let lhs = parse_from_json(lhs_src, arena)?;
+    let rhs = parse_from_json(rhs_src, arena)?;
+    Ok((lhs, rhs))
+}
+
 fn diff_file_content(
     display_path: &str,
     extra_info: Option<String>,
@@ -601,6 +705,71 @@ fn diff_file_content(
                         diff_options,
                     ) {
                         Ok((lhs, rhs)) => {
+                            let arena = Arena::new();
+                            let json_input = r#"{
+                                "nameResEdges": [
+                                    { "from": "SimpleName@8", "to": "sample" },
+                                    { "from": "SimpleName@32", "to": "Lsample/Test;" }
+                                ],
+                                "trees": [
+                                    {
+                                        "node": "CompilationUnit",
+                                        "fileName": "C:\\Users\\Public\\TestFolder\\1\\try\\Test.java",
+                                        "types": [
+                                            {
+                                                "node": "TypeDeclaration",
+                                                "methods": [
+                                                    {
+                                                        "node": "MethodDeclaration",
+                                                        "name": "main",
+                                                        "location": 41,
+                                                        "id": "MethodDeclaration@41"
+                                                    }
+                                                ],
+                                                "name": {
+                                                    "node": "SimpleName",
+                                                    "identifier": "Test",
+                                                    "location": 32,
+                                                    "id": "SimpleName@32"
+                                                },
+                                                "location": 19,
+                                                "id": "TypeDeclaration@19",
+                                                "modifiers": [
+                                                    {
+                                                        "node": "Modifier",
+                                                        "location": 19,
+                                                        "id": "Modifier@19",
+                                                        "keyword": "public"
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                        "package": {
+                                            "node": "PackageDeclaration",
+                                            "name": {
+                                                "node": "SimpleName",
+                                                "identifier": "sample",
+                                                "location": 8,
+                                                "id": "SimpleName@8"
+                                            },
+                                            "location": 0,
+                                            "id": "PackageDeclaration@0"
+                                        },
+                                        "location": 0,
+                                        "id": "CompilationUnit@0"
+                                    }
+                                ]
+                            }"#;
+                            match to_syntax_from_json(json_input, json_input, &arena) {
+                                Ok((lhs_res, rhc_res)) => {
+                                    lhs = lhs_res;
+                                    rhs = rhc_res;
+                                }
+                                Err(e) => {
+                                    eprintln!("Error: {}", e);
+                                }
+                            }
+
                             if diff_options.check_only {
                                 let has_syntactic_changes = lhs != rhs;
                                 return DiffResult {
