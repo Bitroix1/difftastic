@@ -84,6 +84,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 use std::path::Path;
 use std::{env, thread};
 
+use std::fs;
 use serde_json::Value;
 
 use humansize::{format_size, BINARY};
@@ -617,7 +618,7 @@ fn build_syntax_tree<'a>(value: &Value, arena: &'a Arena<Syntax<'a>>) -> &'a Syn
 }
 
 // Function to parse JSON and build the syntax tree
-pub fn parse_from_json<'a>(
+pub(crate) fn parse_from_json<'a>(
     src: &str,
     arena: &'a Arena<Syntax<'a>>,
 ) -> Result<&'a Syntax<'a>, String> {
@@ -650,12 +651,14 @@ fn diff_file_content(
     diff_options: &DiffOptions,
     overrides: &[(LanguageOverride, Vec<glob::Pattern>)],
 ) -> DiffResult {
+    
+
     let guess_src = match rhs_path {
         FileArgument::DevNull => &lhs_src,
         _ => &rhs_src,
     };
 
-    let language = guess(Path::new(display_path), guess_src, overrides);
+    let language = Some(Language::Java);//guess(Path::new(display_path), guess_src, overrides);
     let lang_config = language.map(|lang| (lang, tsp::from_language(lang)));
 
     if lhs_src == rhs_src {
@@ -706,186 +709,16 @@ fn diff_file_content(
                     ) {
                         Ok((mut lhs,mut rhs)) => {
                             let arena = Arena::new();
-                            let lhs_input = r#"{
-  "nameResEdges": [
-    {
-      "from": "SimpleName@8",
-      "to": "sample"
-    },
-    {
-      "from": "SimpleName@32",
-      "to": "Lsample/Test;"
-    },
-    {
-      "from": "SimpleName@60",
-      "to": "Lsample/Test;.main([LString;)V"
-    },
-    {
-      "from": "SimpleName@65",
-      "to": "Recovered#typeBindingLString;0"
-    },
-    {
-      "from": "SimpleName@74",
-      "to": "Lsample/Test;.main([LString;)V#args#0#0"
-    },
-    {
-      "from": "SimpleName@89",
-      "to": "Lsample/Test;.main([LString;)V#x"
-    },
-    {
-      "from": "SimpleName@99",
-      "to": "null"
-    },
-    {
-      "from": "SimpleName@106",
-      "to": "null"
-    },
-    {
-      "from": "SimpleName@110",
-      "to": "null"
-    },
-    {
-      "from": "SimpleName@115",
-      "to": "Lsample/Test;.main([LString;)V#x"
-    }
-  ],
-  "trees": [
-    {
-      "node": "CompilationUnit",
-      "fileName": "C:\\Users\\Public\\TestFolder\\1\\try\\Test.java",
-      "types": [
-        {
-          "node": "TypeDeclaration",
-          "methods": [
-            {
-              "node": "MethodDeclaration",
-              "name": "main",
-              "location": 41,
-              "id": "MethodDeclaration@41"
-            }
-          ],
-          "name": {
-            "node": "SimpleName",
-            "identifier": "Test",
-            "location": 32,
-            "id": "SimpleName@32"
-          },
-          "location": 19,
-          "id": "TypeDeclaration@19",
-          "modifiers": [
-            {
-              "node": "Modifier",
-              "location": 19,
-              "id": "Modifier@19",
-              "keyword": "public"
-            }
-          ]
-        }
-      ],
-      "package": {
-        "node": "PackageDeclaration",
-        "name": {
-          "node": "SimpleName",
-          "identifier": "sample",
-          "location": 8,
-          "id": "SimpleName@8"
-        },
-        "location": 0,
-        "id": "PackageDeclaration@0"
-      },
-      "location": 0,
-      "id": "CompilationUnit@0"
-    }
-  ]
-}"#;
-                            let rhs_input = r#"{
-    "nameResEdges": [
-        {
-        "from": "SimpleName@8",
-        "to": "sample"
-        },
-        {
-        "from": "SimpleName@32",
-        "to": "Lsample/TestNew~Test;"
-        },
-        {
-        "from": "SimpleName@60",
-        "to": "Lsample/TestNew~Test;.main([LString;)V"
-        },
-        {
-        "from": "SimpleName@65",
-        "to": "Recovered#typeBindingLString;0"
-        },
-        {
-        "from": "SimpleName@74",
-        "to": "Lsample/TestNew~Test;.main([LString;)V#args#0#0"
-        },
-        {
-        "from": "SimpleName@85",
-        "to": "null"
-        },
-        {
-        "from": "SimpleName@92",
-        "to": "null"
-        },
-        {
-        "from": "SimpleName@96",
-        "to": "null"
-        }
-    ],
-    "trees": [
-        {
-        "node": "CompilationUnit",
-        "fileName": "C:\\Users\\Public\\TestFolder\\1\\try\\TestNew.java",
-        "types": [
-            {
-            "node": "TypeDeclaration",
-            "methods": [
-                {
-                "node": "MethodDeclaration",
-                "name": "main",
-                "location": 41,
-                "id": "MethodDeclaration@41"
-                }
-            ],
-            "name": {
-                "node": "SimpleName",
-                "identifier": "Test",
-                "location": 32,
-                "id": "SimpleName@32"
-            },
-            "location": 19,
-            "id": "TypeDeclaration@19",
-            "modifiers": [
-                {
-                "node": "Modifier",
-                "location": 19,
-                "id": "Modifier@19",
-                "keyword": "public"
-                }
-            ]
-            }
-        ],
-        "package": {
-            "node": "PackageDeclaration",
-            "name": {
-            "node": "SimpleName",
-            "identifier": "sample",
-            "location": 8,
-            "id": "SimpleName@8"
-            },
-            "location": 0,
-            "id": "PackageDeclaration@0"
-        },
-        "location": 0,
-        "id": "CompilationUnit@0"
-        }
-    ]
-}"#;
-                            match to_syntax_from_json(lhs_input, rhs_input, &arena) {
+                            let lhs_input = fs::read_to_string(r"/mnt/c/Users/Public/TestFolder/1/lhs.json").unwrap();
+                            let rhs_input = fs::read_to_string(r"/mnt/c/Users/Public/TestFolder/1/rhs.json").unwrap();
+                            match to_syntax_from_json(&lhs_input, &rhs_input, &arena) {
                                 Ok((lhs_res, rhc_res)) => {
                                     lhs = vec![lhs_res];
                                     rhs = vec![rhc_res];
+                                    println!("#{:?}", lhs);
+                                    println!("\n\n\n");
+                                    println!("#{:?}", rhs);
+                                    println!("\n\n\n");
                                 }
                                 Err(e) => {
                                     eprintln!("Error: {}", e);
